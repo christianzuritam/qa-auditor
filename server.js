@@ -5,7 +5,27 @@ const multer = require("multer");
 
 const app = express();
 
-app.use(cors({ origin: ["https://qa.christianzurita.com", "http://localhost:3000"] }));
+const allowedOrigins = new Set([
+  "https://qa.christianzurita.com",
+  "https://www.qa.christianzurita.com",
+  "https://qa-auditor-app.onrender.com",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000"
+]);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Permite herramientas sin header Origin (curl, health checks).
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.has(origin)) return callback(null, true);
+      return callback(new Error(`Origen no permitido por CORS: ${origin}`));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 200
+  })
+);
 const port = process.env.PORT || 3000;
 
 const upload = multer({
