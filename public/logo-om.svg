@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" role="img" aria-label="Logo OM">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="85%">
+      <stop offset="0%" stop-color="#3a0f62"/>
+      <stop offset="60%" stop-color="#21072f"/>
+      <stop offset="100%" stop-color="#09090d"/>
+    </radialGradient>
+  </defs>
+  <rect width="220" height="220" rx="18" fill="url(#bg)"/>
+  <g fill="#ffffff">
+    <circle cx="58" cy="90" r="5"/>
+    <circle cx="68" cy="80" r="5"/>
+    <circle cx="80" cy="73" r="5"/>
+    <circle cx="93" cy="69" r="5"/>
+    <circle cx="106" cy="70" r="5"/>
+    <circle cx="118" cy="75" r="5"/>
+    <circle cx="128" cy="84" r="5"/>
+    <circle cx="135" cy="96" r="5"/>
+    <circle cx="66" cy="103" r="5"/>
+    <circle cx="79" cy="96" r="5"/>
+    <circle cx="93" cy="93" r="5"/>
+    <circle cx="107" cy="94" r="5"/>
+    <circle cx="120" cy="100" r="5"/>
+    <path d="M42 122c0-22 16-38 38-38v15c-14 0-23 9-23 23s9 24 23 24h16v15H80c-22 0-38-16-38-39z"/>
+    <path d="M111 84h24l17 52 17-52h24v77h-16v-54l-18 54h-14l-18-54v54h-16z"/>
+  </g>
+</svg>

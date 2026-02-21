@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Google">
+  <rect width="64" height="64" rx="14" fill="#fff"/>
+  <g fill="none" stroke-width="8" stroke-linecap="round">
+    <path d="M51 32c0-10.5-8.5-19-19-19-6.5 0-12.3 3.2-15.7 8.2" stroke="#ea4335"/>
+    <path d="M16.3 21.2A19 19 0 0 0 13 32c0 3.3.8 6.4 2.3 9.2" stroke="#fbbc05"/>
+    <path d="M15.3 41.2C18.7 46 24.5 49 31 49c8.8 0 16-5.7 18.4-13.7" stroke="#34a853"/>
+    <path d="M49.4 35H31" stroke="#4285f4"/>
+  </g>
+</svg>

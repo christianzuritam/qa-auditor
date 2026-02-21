@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QA potenciado con IA</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero-header">
+        <div class="logo-wrap">
+          <img class="brand-logo" src="/logo-om.jpg" alt="Logo OM" />
+        </div>
+        <h1>QA potenciado con IA</h1>
+      </header>
+
+      <form id="auditForm" class="audit-form">
+        <div class="platform-row">
+          <label for="plataformaNombre">Plataforma destino</label>
+          <select id="plataformaNombre" name="plataformaNombre">
+            <option value="Meta">Meta</option>
+            <option value="TikTok">TikTok</option>
+            <option value="Google">Google</option>
+          </select>
+          <div class="platform-logo-box" aria-live="polite">
+            <img id="platformLogo" class="platform-logo" alt="Logo de plataforma" />
+          </div>
+        </div>
+
+        <section class="upload-grid">
+          <label class="upload-card" for="happyFox">
+            <span class="upload-title">Sube captura de HappyFox</span>
+            <span class="upload-icon" aria-hidden="true">
+              <img class="upload-icon-svg" src="/upload.svg" alt="" />
+            </span>
+            <input id="happyFox" name="happyFox" type="file" accept="image/*" required />
+            <span id="happyFoxName" class="file-name">Ningún archivo seleccionado</span>
+          </label>
+
+          <label class="upload-card" for="plataforma">
+            <span class="upload-title">Sube captura de la plataforma destino</span>
+            <span class="upload-icon" aria-hidden="true">
+              <img class="upload-icon-svg" src="/upload.svg" alt="" />
+            </span>
+            <input id="plataforma" name="plataforma" type="file" accept="image/*" required />
+            <span id="plataformaName" class="file-name">Ningún archivo seleccionado</span>
+          </label>
+        </section>
+
+        <button id="auditButton" type="submit">Auditar</button>
+        <button id="exportPdfBtn" class="secondary-action" type="button" disabled>Exportar resultado en PDF</button>
+        <div id="veredictoBox" class="veredicto-box">
+          Veredicto: esperando imágenes para iniciar auditoría.
+        </div>
+      </form>
+
+      <section id="resultado" class="resultado oculto"></section>
+      <section id="historial" class="resultado">
+        <h2>Campos archivados (historial)</h2>
+        <p class="muted">Todavía no hay auditorías archivadas.</p>
+      </section>
+    </main>
+
+    <footer>
+      Creado por
+      <a href="mailto:christian.zurita@kinesso.com">Christian Zurita</a>
+    </footer>
+
+    <script>
+      window.QA_API_BASE_URL = "";
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

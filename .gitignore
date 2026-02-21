@@ -1,0 +1,19 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# OS files
+.DS_Store
+
+# Local snapshots / deploy artifacts
+_base_snapshots/
+deploy-qa/
+deploy-qa 2/
+*.zip
+
+# Logs
+npm-debug.log*
