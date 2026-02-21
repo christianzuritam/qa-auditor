@@ -31,6 +31,20 @@ const AUDIT_API_URL =
     ? `${API_BASE_URL.replace(/\/$/, "")}/api/auditar`
     : "/api/auditar";
 
+async function parseApiJson(response) {
+  const contentType = response.headers.get("content-type") || "sin content-type";
+  const statusInfo = `${response.status} ${response.statusText}`.trim();
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    const preview = raw.trim().slice(0, 120).replace(/\s+/g, " ");
+    throw new Error(
+      `La API no devolvió JSON (${statusInfo}, ${contentType}). Respuesta: ${preview || "vacía"}`
+    );
+  }
+}
+
 async function imageUrlToDataUrl(url) {
   try {
     const response = await fetch(url);
@@ -565,7 +579,7 @@ form.addEventListener("submit", async (event) => {
       body: formData
     });
 
-    const payload = await response.json();
+    const payload = await parseApiJson(response);
 
     if (!response.ok || !payload.ok) {
       throw new Error(

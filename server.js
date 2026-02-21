@@ -25,6 +25,14 @@ const anthropicFallbackModels = [
 
 app.use(express.static("public"));
 
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "qa-auditor-api",
+    ts: new Date().toISOString()
+  });
+});
+
 function parseLooseJson(text) {
   try {
     return JSON.parse(text);
