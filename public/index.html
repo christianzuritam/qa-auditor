@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QA potenciado con IA</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260303-2" />
   </head>
   <body>
     <main class="container">
@@ -18,10 +18,15 @@
       <form id="auditForm" class="audit-form">
         <div class="platform-row">
           <label for="plataformaNombre">Plataforma destino</label>
-          <select id="plataformaNombre" name="plataformaNombre">
+          <select id="plataformaNombre" class="platform-select" name="plataformaNombre">
             <option value="Meta">Meta</option>
             <option value="TikTok">TikTok</option>
             <option value="Google">Google</option>
+          </select>
+          <label for="iaProvider">Motor IA</label>
+          <select id="iaProvider" class="ia-select" name="iaProvider">
+            <option value="claude" selected>Claude</option>
+            <option value="openai">OpenAI</option>
           </select>
           <div class="platform-logo-box" aria-live="polite">
             <img id="platformLogo" class="platform-logo" alt="Logo de plataforma" />
@@ -56,6 +61,21 @@
       </form>
 
       <section id="resultado" class="resultado oculto"></section>
+      <section id="chatAuditoria" class="resultado chat-panel oculto">
+        <h2>Chat de auditoría</h2>
+        <p class="muted">Escribe para reevaluar o corregir el resultado actual.</p>
+        <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <textarea
+            id="chatInput"
+            rows="3"
+            maxlength="600"
+            placeholder="Ejemplo: Reevalúa inversión/presupuesto porque en Happy Fox veo $600 y $900."
+            required
+          ></textarea>
+          <button id="chatSendButton" class="chat-send-btn" type="submit">Enviar al auditor</button>
+        </form>
+      </section>
       <section id="historial" class="resultado">
         <h2>Campos archivados (historial)</h2>
         <p class="muted">Todavía no hay auditorías archivadas.</p>
@@ -68,9 +88,10 @@
     </footer>
 
     <script>
-      window.QA_API_BASE_URL = "";
+      window.QA_API_BASE_URL = "https://qa-auditor-app.onrender.com";
+      window.QA_APP_VERSION = "20260303-2";
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260303-2"></script>
   </body>
 </html>

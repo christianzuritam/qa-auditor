@@ -26,6 +26,7 @@ app.use(
     optionsSuccessStatus: 200
   })
 );
+app.use(express.json({ limit: "2mb" }));
 const port = process.env.PORT || 3000;
 
 const upload = multer({
@@ -42,6 +43,30 @@ const anthropicFallbackModels = [
   "claude-3-5-sonnet-20241022",
   "claude-3-haiku-20240307"
 ];
+const openAIModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const openAIFallbackModels = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+const requiredFieldOrder = [
+  "segmentación",
+  "inversión/presupuesto",
+  "fechas",
+  "objetivo de campaña",
+  "audiencias",
+  "geografía",
+  "ubicaciones",
+  "creatividad/formato"
+];
+
+function normalizarProveedorIA(value = "") {
+  const raw = String(value || "")
+    .toLowerCase()
+    .trim();
+  if (raw.includes("openai")) return "openai";
+  return "claude";
+}
+
+function etiquetaProveedorIA(provider = "claude") {
+  return provider === "openai" ? "OpenAI" : "Claude";
+}
 
 app.use(express.static("public"));
 
@@ -127,6 +152,56 @@ function normalizarCampo(item = {}) {
   };
 }
 
+function normalizarNombreCampo(campo = "") {
+  return String(campo || "")
+    .toLowerCase()
+    .trim();
+}
+
+function alinearCamposObligatorios(camposEntrada = [], camposFallback = []) {
+  const campoMap = new Map();
+
+  camposFallback.forEach((item) => {
+    const normalized = normalizarCampo(item);
+    campoMap.set(normalizarNombreCampo(normalized.campo), normalized);
+  });
+
+  camposEntrada.forEach((item) => {
+    const normalized = normalizarCampo(item);
+    campoMap.set(normalizarNombreCampo(normalized.campo), normalized);
+  });
+
+  return requiredFieldOrder.map((campo) => {
+    const existing = campoMap.get(normalizarNombreCampo(campo));
+    if (existing) {
+      return { ...existing, campo };
+    }
+    return normalizarCampo({
+      campo,
+      estado: "no_visible",
+      happyfox: "No visible en captura de Happy Fox.",
+      plataforma: "No visible en captura de plataforma.",
+      diferencia: "Sin evidencia suficiente para validar este campo.",
+      accion: sugerirAccion("no_visible", campo)
+    });
+  });
+}
+
+function normalizarResultadoAuditoria(data = {}, fallbackData = {}) {
+  const camposEntrada = Array.isArray(data?.campos) ? data.campos : [];
+  const camposFallback = Array.isArray(fallbackData?.campos) ? fallbackData.campos : [];
+  const iaProviderRaw = data?.iaProvider || fallbackData?.iaProvider || "Claude";
+  const iaProvider = etiquetaProveedorIA(normalizarProveedorIA(iaProviderRaw));
+
+  return {
+    iaProvider,
+    resumen: data?.resumen || "Sin resumen",
+    aprobado: Boolean(data?.aprobado),
+    campos: alinearCamposObligatorios(camposEntrada, camposFallback),
+    alertas: Array.isArray(data?.alertas) ? data.alertas.filter((item) => typeof item === "string") : []
+  };
+}
+
 function recoverPartialResultFromText(rawText) {
   if (!rawText || typeof rawText !== "string") return null;
   const cleaned = rawText
@@ -184,6 +259,177 @@ async function fetchAvailableAnthropicModels(apiKey) {
   }
 }
 
+async function callAnthropicWithFallback({ systemPrompt, messages, maxTokens = 4096, temperature = 0 }) {
+  const discoveredModels = await fetchAvailableAnthropicModels(process.env.ANTHROPIC_API_KEY);
+  const modelCandidates = [...new Set([anthropicModel, ...anthropicFallbackModels, ...discoveredModels])];
+
+  let lastError = "";
+  const modelErrors = [];
+
+  for (const modelCandidate of modelCandidates) {
+    const anthropicBody = {
+      model: modelCandidate,
+      max_tokens: maxTokens,
+      temperature,
+      system: systemPrompt,
+      messages
+    };
+
+    let response;
+    try {
+      response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(anthropicBody)
+      });
+    } catch (networkError) {
+      const code = networkError?.cause?.code || networkError?.code || "NETWORK_ERROR";
+      const message = networkError?.cause?.message || networkError?.message || "Sin detalle de red";
+      throw new Error(`No se pudo conectar con Anthropic (${code}): ${message}`);
+    }
+
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_e) {
+      payload = {};
+    }
+
+    if (response.ok) {
+      return extractAnthropicText(payload?.content);
+    }
+
+    const errorText = payload?.error?.message || payload?.error?.type || "Error Anthropic API";
+    lastError = errorText;
+    modelErrors.push(`${modelCandidate}: ${errorText}`);
+    const maybeModelError =
+      /model/i.test(errorText) || payload?.error?.type === "not_found_error" || payload?.error?.type === "invalid_request_error";
+    if (!maybeModelError) {
+      throw new Error(errorText);
+    }
+  }
+
+  const joined = modelErrors.length ? ` | Intentos: ${modelErrors.join(" || ")}` : "";
+  throw new Error((lastError || "No se pudo usar ninguno de los modelos configurados") + joined);
+}
+
+function extractOpenAIText(payload = {}) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  if (Array.isArray(payload?.output)) {
+    const chunks = [];
+    payload.output.forEach((item) => {
+      if (Array.isArray(item?.content)) {
+        item.content.forEach((piece) => {
+          if (piece?.type === "output_text" && typeof piece?.text === "string") {
+            chunks.push(piece.text);
+          } else if (piece?.type === "text" && typeof piece?.text === "string") {
+            chunks.push(piece.text);
+          }
+        });
+      }
+    });
+    const joined = chunks.join("\n").trim();
+    if (joined) return joined;
+  }
+
+  if (Array.isArray(payload?.choices) && payload.choices[0]?.message?.content) {
+    const maybeContent = payload.choices[0].message.content;
+    if (typeof maybeContent === "string" && maybeContent.trim()) return maybeContent.trim();
+    if (Array.isArray(maybeContent)) {
+      const joined = maybeContent
+        .map((part) => (typeof part?.text === "string" ? part.text : ""))
+        .join("\n")
+        .trim();
+      if (joined) return joined;
+    }
+  }
+
+  return "";
+}
+
+async function callOpenAIWithFallback({ systemPrompt, userPrompt, images = [], maxTokens = 4096, temperature = 0 }) {
+  const modelCandidates = [...new Set([openAIModel, ...openAIFallbackModels])];
+  let lastError = "";
+  const modelErrors = [];
+
+  for (const modelCandidate of modelCandidates) {
+    const userContent = [{ type: "input_text", text: String(userPrompt || "") }];
+    images.forEach((img, index) => {
+      const mimeType = img?.mimeType || "image/png";
+      const base64 = String(img?.base64 || "").trim();
+      if (!base64) return;
+      userContent.push({ type: "input_text", text: `Imagen ${index + 1}: ${img?.label || "captura"}` });
+      userContent.push({ type: "input_image", image_url: `data:${mimeType};base64,${base64}` });
+    });
+
+    const payloadBody = {
+      model: modelCandidate,
+      temperature,
+      max_output_tokens: maxTokens,
+      input: [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: String(systemPrompt || "") }]
+        },
+        {
+          role: "user",
+          content: userContent
+        }
+      ]
+    };
+
+    let response;
+    try {
+      response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(payloadBody)
+      });
+    } catch (networkError) {
+      const code = networkError?.cause?.code || networkError?.code || "NETWORK_ERROR";
+      const message = networkError?.cause?.message || networkError?.message || "Sin detalle de red";
+      throw new Error(`No se pudo conectar con OpenAI (${code}): ${message}`);
+    }
+
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_e) {
+      payload = {};
+    }
+
+    if (response.ok) {
+      const text = extractOpenAIText(payload);
+      if (!text) throw new Error("OpenAI no devolvió texto utilizable");
+      return text;
+    }
+
+    const errorText = payload?.error?.message || payload?.error?.type || "Error OpenAI API";
+    lastError = errorText;
+    modelErrors.push(`${modelCandidate}: ${errorText}`);
+    const maybeModelError =
+      /model/i.test(errorText) ||
+      payload?.error?.code === "model_not_found" ||
+      payload?.error?.type === "invalid_request_error";
+    if (!maybeModelError) {
+      throw new Error(errorText);
+    }
+  }
+
+  const joined = modelErrors.length ? ` | Intentos: ${modelErrors.join(" || ")}` : "";
+  throw new Error((lastError || "No se pudo usar ninguno de los modelos OpenAI configurados") + joined);
+}
+
 app.post(
   "/api/auditar",
   upload.fields([
@@ -192,7 +438,15 @@ app.post(
   ]),
   async (req, res) => {
     try {
-      if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === "tu_claude_api_key_aqui") {
+      const iaProvider = normalizarProveedorIA(req.body?.iaProvider || "claude");
+      if (iaProvider === "openai") {
+        if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "tu_openai_api_key_aqui") {
+          return res.status(500).json({
+            ok: false,
+            error: "OPENAI_API_KEY no es valida o no esta configurada en .env"
+          });
+        }
+      } else if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === "tu_claude_api_key_aqui") {
         return res.status(500).json({
           ok: false,
           error: "ANTHROPIC_API_KEY no es valida o no esta configurada en .env"
@@ -248,87 +502,56 @@ Reglas:
   "alertas": string[]
 }`;
 
-      const discoveredModels = await fetchAvailableAnthropicModels(process.env.ANTHROPIC_API_KEY);
-      const modelCandidates = [...new Set([anthropicModel, ...anthropicFallbackModels, ...discoveredModels])];
-      let apiPayload = null;
-      let lastError = "";
-      const modelErrors = [];
-
-      for (const modelCandidate of modelCandidates) {
-        const anthropicBody = {
-          model: modelCandidate,
-          max_tokens: 4096,
-          temperature: 0,
-          system:
-            "Eres auditor de pauta digital para una central de medios. Compara pedido vs configuración real sin inventar. Debes escribir hallazgos claros para equipo operativo y responder solo JSON.",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: promptText },
-                { type: "text", text: "Imagen 1: Solicitud en Happy Fox" },
+      let parsed;
+      const completionText =
+        iaProvider === "openai"
+          ? await callOpenAIWithFallback({
+              systemPrompt:
+                "Eres auditor de pauta digital para una central de medios. Compara pedido vs configuración real sin inventar. Debes escribir hallazgos claros para equipo operativo y responder solo JSON.",
+              userPrompt: promptText,
+              images: [
                 {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: happyFoxFile.mimetype,
-                    data: happyFoxFile.buffer.toString("base64")
-                  }
+                  label: "Solicitud en Happy Fox",
+                  mimeType: happyFoxFile.mimetype,
+                  base64: happyFoxFile.buffer.toString("base64")
                 },
-                { type: "text", text: "Imagen 2: Configuración en plataforma" },
                 {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: plataformaFile.mimetype,
-                    data: plataformaFile.buffer.toString("base64")
-                  }
+                  label: "Configuración en plataforma",
+                  mimeType: plataformaFile.mimetype,
+                  base64: plataformaFile.buffer.toString("base64")
                 }
               ]
-            }
-          ]
-        };
-
-        let response;
-        try {
-          response = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: {
-              "x-api-key": process.env.ANTHROPIC_API_KEY,
-              "anthropic-version": "2023-06-01",
-              "content-type": "application/json"
-            },
-            body: JSON.stringify(anthropicBody)
-          });
-        } catch (networkError) {
-          const code = networkError?.cause?.code || networkError?.code || "NETWORK_ERROR";
-          const message = networkError?.cause?.message || networkError?.message || "Sin detalle de red";
-          throw new Error(`No se pudo conectar con Anthropic (${code}): ${message}`);
-        }
-
-        const payload = await response.json();
-        if (response.ok) {
-          apiPayload = payload;
-          break;
-        }
-
-        const errorText = payload?.error?.message || payload?.error?.type || "Error Anthropic API";
-        lastError = errorText;
-        modelErrors.push(`${modelCandidate}: ${errorText}`);
-        const maybeModelError =
-          /model/i.test(errorText) || payload?.error?.type === "not_found_error" || payload?.error?.type === "invalid_request_error";
-        if (!maybeModelError) {
-          throw new Error(errorText);
-        }
-      }
-
-      if (!apiPayload) {
-        const joined = modelErrors.length ? ` | Intentos: ${modelErrors.join(" || ")}` : "";
-        throw new Error((lastError || "No se pudo usar ninguno de los modelos configurados") + joined);
-      }
-
-      let parsed;
-      const completionText = extractAnthropicText(apiPayload?.content);
+            })
+          : await callAnthropicWithFallback({
+              systemPrompt:
+                "Eres auditor de pauta digital para una central de medios. Compara pedido vs configuración real sin inventar. Debes escribir hallazgos claros para equipo operativo y responder solo JSON.",
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: promptText },
+                    { type: "text", text: "Imagen 1: Solicitud en Happy Fox" },
+                    {
+                      type: "image",
+                      source: {
+                        type: "base64",
+                        media_type: happyFoxFile.mimetype,
+                        data: happyFoxFile.buffer.toString("base64")
+                      }
+                    },
+                    { type: "text", text: "Imagen 2: Configuración en plataforma" },
+                    {
+                      type: "image",
+                      source: {
+                        type: "base64",
+                        media_type: plataformaFile.mimetype,
+                        data: plataformaFile.buffer.toString("base64")
+                      }
+                    }
+                  ]
+                }
+              ]
+            });
       try {
         parsed = parseJsonFromModelOutput(completionText);
       } catch (_e) {
@@ -343,12 +566,8 @@ Reglas:
           };
       }
 
-      parsed = {
-        resumen: parsed?.resumen || "Sin resumen",
-        aprobado: Boolean(parsed?.aprobado),
-        campos: Array.isArray(parsed?.campos) ? parsed.campos.map(normalizarCampo) : [],
-        alertas: Array.isArray(parsed?.alertas) ? parsed.alertas : []
-      };
+      parsed = normalizarResultadoAuditoria(parsed);
+      parsed.iaProvider = etiquetaProveedorIA(iaProvider);
 
       return res.json({ ok: true, resultado: parsed });
     } catch (error) {
@@ -360,6 +579,152 @@ Reglas:
     }
   }
 );
+
+app.post("/api/chat-auditoria", async (req, res) => {
+  try {
+    const iaProvider = normalizarProveedorIA(req.body?.iaProvider || "claude");
+    if (iaProvider === "openai") {
+      if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "tu_openai_api_key_aqui") {
+        return res.status(500).json({
+          ok: false,
+          error: "OPENAI_API_KEY no es valida o no esta configurada en .env"
+        });
+      }
+    } else if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === "tu_claude_api_key_aqui") {
+      return res.status(500).json({
+        ok: false,
+        error: "ANTHROPIC_API_KEY no es valida o no esta configurada en .env"
+      });
+    }
+
+    const mensaje = String(req.body?.mensaje || "").trim();
+    if (!mensaje) {
+      return res.status(400).json({
+        ok: false,
+        error: "Debes enviar un mensaje para chatear con el auditor"
+      });
+    }
+
+    const plataformaNombre = String(req.body?.plataformaNombre || "No especificada").trim();
+    const resultadoActualRaw = req.body?.resultadoActual || {};
+    const rawCampos = Array.isArray(resultadoActualRaw?.campos) ? resultadoActualRaw.campos : [];
+    if (!rawCampos.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "No se recibió un resultado base válido para reevaluar"
+      });
+    }
+    const resultadoBase = normalizarResultadoAuditoria(resultadoActualRaw);
+
+    const chatHistorial = Array.isArray(req.body?.chatHistorial)
+      ? req.body.chatHistorial
+          .slice(-10)
+          .map((item) => ({
+            role: item?.role === "assistant" ? "assistant" : "user",
+            text: String(item?.text || "").slice(0, 800)
+          }))
+          .filter((item) => item.text.trim().length > 0)
+      : [];
+
+    const historialTexto = chatHistorial.length
+      ? chatHistorial.map((item) => `${item.role === "assistant" ? "Auditor" : "Usuario"}: ${item.text}`).join("\n")
+      : "Sin historial previo";
+
+    const promptChat = `Plataforma seleccionada: ${plataformaNombre}
+Resultado actual de auditoría (JSON):
+${JSON.stringify(resultadoBase, null, 2)}
+
+Historial de chat:
+${historialTexto}
+
+Nueva instrucción del usuario:
+${mensaje}
+
+Tarea:
+- Responde con lenguaje claro para planners y traffickers.
+- Si corresponde, corrige/reevalúa el resultado actual en base al mensaje del usuario y el resultado existente.
+- No inventes datos no visibles.
+- Si Happy Fox y plataforma están ambos no visibles para un campo, ese estado debe ser "no_visible".
+- Mantén EXACTAMENTE los 8 campos obligatorios: segmentación, inversión/presupuesto, fechas, objetivo de campaña, audiencias, geografía, ubicaciones, creatividad/formato.
+- Devuelve SOLO JSON válido, sin markdown.
+
+Formato de salida obligatorio:
+{
+  "respuesta": string,
+  "resultadoActualizado": {
+    "resumen": string,
+    "aprobado": boolean,
+    "campos": [
+      {
+        "campo": string,
+        "estado": "correcto" | "diferencia" | "no_visible",
+        "happyfox": string,
+        "plataforma": string,
+        "diferencia": string,
+        "accion": string
+      }
+    ],
+    "alertas": string[]
+  }
+}`;
+
+    const completionText =
+      iaProvider === "openai"
+        ? await callOpenAIWithFallback({
+            systemPrompt:
+              "Eres auditor senior de pauta digital. Respondes en español claro y siempre devuelves JSON válido cuando se solicita.",
+            userPrompt: promptChat,
+            maxTokens: 3072,
+            temperature: 0
+          })
+        : await callAnthropicWithFallback({
+            systemPrompt:
+              "Eres auditor senior de pauta digital. Respondes en español claro y siempre devuelves JSON válido cuando se solicita.",
+            maxTokens: 3072,
+            temperature: 0,
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: promptChat }]
+              }
+            ]
+          });
+
+    let parsedChat;
+    try {
+      parsedChat = parseJsonFromModelOutput(completionText);
+    } catch (_e) {
+      parsedChat = {
+        respuesta: completionText || "No pude interpretar la solicitud.",
+        resultadoActualizado: resultadoBase
+      };
+    }
+
+    const respuesta =
+      typeof parsedChat?.respuesta === "string" && parsedChat.respuesta.trim()
+        ? parsedChat.respuesta.trim()
+        : "Reevalué el resultado según tu mensaje.";
+
+    const resultadoActualizado = normalizarResultadoAuditoria(
+      parsedChat?.resultadoActualizado || parsedChat?.resultado || resultadoBase,
+      resultadoBase
+    );
+    resultadoActualizado.iaProvider = etiquetaProveedorIA(iaProvider);
+
+    return res.json({
+      ok: true,
+      respuesta,
+      iaProvider: etiquetaProveedorIA(iaProvider),
+      resultadoActualizado
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: "Error al chatear con IA",
+      detalle: error?.message || "Error desconocido"
+    });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Servidor activo en http://localhost:${port}`);

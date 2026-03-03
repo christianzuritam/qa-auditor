@@ -10,14 +10,22 @@ const plataformaInput = document.getElementById("plataforma");
 const happyFoxName = document.getElementById("happyFoxName");
 const plataformaName = document.getElementById("plataformaName");
 const plataformaSelect = document.getElementById("plataformaNombre");
+const iaProviderSelect = document.getElementById("iaProvider");
 const platformLogo = document.getElementById("platformLogo");
+const chatPanel = document.getElementById("chatAuditoria");
+const chatMessages = document.getElementById("chatMessages");
+const chatForm = document.getElementById("chatForm");
+const chatInput = document.getElementById("chatInput");
+const chatSendButton = document.getElementById("chatSendButton");
 
 const HISTORY_KEY = "qa_auditoria_historial_v1";
 let ultimoResultadoParaPdf = null;
+let ultimoResultadoChat = null;
 let ultimoAdjuntoPdf = {
   happyFox: null,
   plataforma: null
 };
+let chatTurns = [];
 
 const PLATFORM_LOGOS = {
   TikTok: "/tiktok-logo.svg",
@@ -25,13 +33,16 @@ const PLATFORM_LOGOS = {
   Google: "/google-logo.svg"
 };
 
-const API_BASE_URL = String(window.QA_API_BASE_URL || "").trim();
-const AUDIT_API_URL =
-  API_BASE_URL && !API_BASE_URL.includes("TU_BACKEND_RENDER")
-    ? `${API_BASE_URL.replace(/\/$/, "")}/api/auditar`
-    : "/api/auditar";
+const DEFAULT_API_BASE_URL = "https://qa-auditor-app.onrender.com";
+const configuredApiBase = String(window.QA_API_BASE_URL || "").trim();
+const API_BASE_URL =
+  configuredApiBase && !configuredApiBase.includes("TU_BACKEND_RENDER")
+    ? configuredApiBase
+    : DEFAULT_API_BASE_URL;
+const AUDIT_API_URL = `${API_BASE_URL.replace(/\/$/, "")}/api/auditar`;
+const CHAT_API_URL = `${API_BASE_URL.replace(/\/$/, "")}/api/chat-auditoria`;
 
-async function parseApiJson(response) {
+async function parseApiJson(response, targetUrl = AUDIT_API_URL) {
   const contentType = response.headers.get("content-type") || "sin content-type";
   const statusInfo = `${response.status} ${response.statusText}`.trim();
   const raw = await response.text();
@@ -40,7 +51,7 @@ async function parseApiJson(response) {
   } catch (_error) {
     const preview = raw.trim().slice(0, 120).replace(/\s+/g, " ");
     throw new Error(
-      `La API no devolvió JSON (${statusInfo}, ${contentType}). Respuesta: ${preview || "vacía"}`
+      `La API no devolvió JSON (${statusInfo}, ${contentType}). URL: ${targetUrl}. Respuesta: ${preview || "vacía"}`
     );
   }
 }
@@ -101,6 +112,56 @@ function actualizarLogoPlataforma() {
   platformLogo.alt = `Logo de ${plataforma}`;
 }
 
+function etiquetaProveedorIA(value = "") {
+  return String(value || "").toLowerCase().includes("openai") ? "OpenAI" : "Claude";
+}
+
+function appendChatMessage(role, text) {
+  if (!chatMessages) return null;
+  const card = document.createElement("article");
+  card.className = `chat-message chat-${role}`;
+
+  const roleLabel = document.createElement("strong");
+  roleLabel.className = "chat-role";
+  roleLabel.textContent = role === "user" ? "Tú" : role === "system" ? "Sistema" : "Auditor IA";
+
+  const body = document.createElement("p");
+  body.className = "chat-text";
+  body.textContent = String(text || "");
+
+  card.appendChild(roleLabel);
+  card.appendChild(body);
+  chatMessages.appendChild(card);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return card;
+}
+
+function limpiarChatUI() {
+  chatTurns = [];
+  if (chatMessages) chatMessages.innerHTML = "";
+  if (chatInput) chatInput.value = "";
+  if (chatPanel) chatPanel.classList.add("oculto");
+}
+
+function iniciarChatUI() {
+  if (!chatPanel || !chatMessages) return;
+  chatTurns = [];
+  chatMessages.innerHTML = "";
+  const providerLabel = ultimoResultadoChat?.iaProvider || etiquetaProveedorIA(iaProviderSelect?.value);
+  appendChatMessage("assistant", `Resultado listo con ${providerLabel}. Puedes pedirme reevaluar o corregir campos específicos.`);
+  chatPanel.classList.remove("oculto");
+}
+
+function acotarChatHistorial(turns = []) {
+  return turns
+    .slice(-10)
+    .map((item) => ({
+      role: item?.role === "assistant" ? "assistant" : "user",
+      text: String(item?.text || "").slice(0, 800)
+    }))
+    .filter((item) => item.text.trim().length > 0);
+}
+
 function guardarEnHistorial(item) {
   const historialActual = obtenerHistorial();
   historialActual.unshift(item);
@@ -151,7 +212,7 @@ function renderHistorial() {
       return `
         <article class="historial-item">
           <div class="historial-head">
-            <p><strong>${item.fecha}</strong> | ${item.plataforma} | <span class="${clase}">${estado}</span></p>
+            <p><strong>${item.fecha}</strong> | ${item.plataforma} | IA: ${item.iaProvider || "Claude"} | <span class="${clase}">${estado}</span></p>
             <button class="history-btn danger" data-history-delete="${index}" type="button">Borrar</button>
           </div>
           <ul>${campos || "<li>Sin campos detectados</li>"}</ul>
@@ -278,8 +339,10 @@ function recuperarResultadoDesdeAlertas(data) {
   }
 }
 
-function renderResultado(data) {
+function renderResultado(data, options = {}) {
+  const { resetChat = false, saveHistory = true } = options;
   const safeData = recuperarResultadoDesdeAlertas(data);
+  const iaProviderLabel = safeData.iaProvider || etiquetaProveedorIA(iaProviderSelect?.value);
   const aprobadoClass = safeData.aprobado ? "estado-ok" : "estado-warn";
   const aprobadoText = safeData.aprobado ? "Aprobado" : "Requiere correcciones";
   const campos = (safeData.campos || []).map(normalizarCampoUI);
@@ -327,6 +390,7 @@ function renderResultado(data) {
   resultado.innerHTML = `
     <h2>Resultado de auditoría</h2>
     <p><strong>Plataforma:</strong> ${safeData.plataformaNombre || "No especificada"}</p>
+    <p><strong>Motor IA:</strong> ${iaProviderLabel}</p>
     <p><strong>Resumen:</strong> ${safeData.resumen || "Sin resumen"}</p>
     <p class="${aprobadoClass}">Estado general: ${aprobadoText}</p>
     <p><strong>Campos correctos:</strong> ${correctos.length}</p>
@@ -346,15 +410,28 @@ function renderResultado(data) {
     veredictoBox.innerHTML = `<span class="estado-warn">Veredicto: hay ${faltantes.length} campo(s) con diferencia y ${noVisibles.length} no visible(s).</span>`;
   }
 
-  guardarEnHistorial({
-    fecha: new Date().toLocaleString("es-EC"),
-    plataforma: safeData.plataformaNombre || "No especificada",
-    aprobado: safeData.aprobado,
-    campos
-  });
+  if (saveHistory) {
+    guardarEnHistorial({
+      fecha: new Date().toLocaleString("es-EC"),
+      plataforma: safeData.plataformaNombre || "No especificada",
+      iaProvider: iaProviderLabel,
+      aprobado: safeData.aprobado,
+      campos
+    });
+  }
+
+  ultimoResultadoChat = {
+    plataformaNombre: safeData.plataformaNombre || "No especificada",
+    iaProvider: iaProviderLabel,
+    resumen: safeData.resumen || "Sin resumen",
+    aprobado: Boolean(safeData.aprobado),
+    campos,
+    alertas: Array.isArray(safeData.alertas) ? safeData.alertas : []
+  };
 
   ultimoResultadoParaPdf = {
     plataformaNombre: safeData.plataformaNombre || "No especificada",
+    iaProvider: iaProviderLabel,
     resumen: safeData.resumen || "Sin resumen",
     estadoGeneral: aprobadoText,
     correctos: correctos.length,
@@ -364,6 +441,12 @@ function renderResultado(data) {
     alertas: safeData.alertas || []
   };
   exportPdfBtn.disabled = false;
+
+  if (resetChat) {
+    iniciarChatUI();
+  } else if (chatPanel) {
+    chatPanel.classList.remove("oculto");
+  }
 
   renderHistorial();
   resultado.classList.remove("oculto");
@@ -440,6 +523,7 @@ async function exportarResultadoPDF() {
   y += 24;
 
   addWrapped(`Plataforma: ${ultimoResultadoParaPdf.plataformaNombre}`);
+  addWrapped(`Motor IA: ${ultimoResultadoParaPdf.iaProvider || "Claude"}`);
   addWrapped(`Resumen: ${ultimoResultadoParaPdf.resumen}`);
   addWrapped(`Estado general: ${ultimoResultadoParaPdf.estadoGeneral}`);
   addWrapped(`Campos correctos: ${ultimoResultadoParaPdf.correctos}`);
@@ -555,6 +639,7 @@ function fileToImageMeta(file) {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
+  limpiarChatUI();
   const formData = new FormData(form);
   const happyFoxFile = happyFoxInput.files?.[0] || null;
   const plataformaFile = plataformaInput.files?.[0] || null;
@@ -579,7 +664,7 @@ form.addEventListener("submit", async (event) => {
       body: formData
     });
 
-    const payload = await parseApiJson(response);
+    const payload = await parseApiJson(response, AUDIT_API_URL);
 
     if (!response.ok || !payload.ok) {
       throw new Error(
@@ -589,10 +674,14 @@ form.addEventListener("submit", async (event) => {
       );
     }
 
-    renderResultado({
-      ...payload.resultado,
-      plataformaNombre: plataformaSelect.value
-    });
+    renderResultado(
+      {
+        ...payload.resultado,
+        plataformaNombre: plataformaSelect.value,
+        iaProvider: payload.resultado?.iaProvider || etiquetaProveedorIA(iaProviderSelect?.value)
+      },
+      { resetChat: true, saveHistory: true }
+    );
   } catch (error) {
     resultado.innerHTML = `<p class="estado-warn">Error: ${error.message}</p>`;
     veredictoBox.innerHTML = `<span class="estado-warn">Veredicto: no se pudo analizar. ${error.message}</span>`;
@@ -618,6 +707,87 @@ historial.addEventListener("click", (event) => {
     borrarTodoHistorial();
   }
 });
+
+if (chatForm) {
+  chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const mensaje = String(chatInput?.value || "").trim();
+    if (!mensaje) return;
+
+    if (!ultimoResultadoChat || !Array.isArray(ultimoResultadoChat.campos) || !ultimoResultadoChat.campos.length) {
+      appendChatMessage("system", "Primero ejecuta una auditoría para habilitar el chat.");
+      return;
+    }
+
+    appendChatMessage("user", mensaje);
+    chatTurns.push({ role: "user", text: mensaje });
+    if (chatInput) chatInput.value = "";
+
+    if (chatSendButton) {
+      chatSendButton.disabled = true;
+      chatSendButton.textContent = "Consultando...";
+    }
+
+    const pending = appendChatMessage("assistant", "Estoy reevaluando el resultado...");
+
+    try {
+      const response = await fetch(CHAT_API_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          mensaje,
+          iaProvider: iaProviderSelect?.value || "claude",
+          plataformaNombre: ultimoResultadoChat.plataformaNombre || plataformaSelect.value || "No especificada",
+          resultadoActual: ultimoResultadoChat,
+          chatHistorial: acotarChatHistorial(chatTurns)
+        })
+      });
+
+      const payload = await parseApiJson(response, CHAT_API_URL);
+      if (!response.ok || !payload.ok) {
+        throw new Error(
+          `${payload.error || "No se pudo procesar el chat"}${
+            payload.detalle ? `: ${payload.detalle}` : ""
+          }`
+        );
+      }
+
+      if (pending) pending.remove();
+
+      const respuesta = String(payload.respuesta || "Resultado actualizado con base en tu solicitud.").trim();
+      appendChatMessage("assistant", respuesta);
+      chatTurns.push({ role: "assistant", text: respuesta });
+
+      if (payload.resultadoActualizado) {
+        renderResultado(
+          {
+            ...payload.resultadoActualizado,
+            iaProvider:
+              payload.resultadoActualizado?.iaProvider ||
+              payload.iaProvider ||
+              ultimoResultadoChat.iaProvider ||
+              etiquetaProveedorIA(iaProviderSelect?.value),
+            plataformaNombre:
+              payload.resultadoActualizado?.plataformaNombre ||
+              ultimoResultadoChat.plataformaNombre ||
+              plataformaSelect.value
+          },
+          { resetChat: false, saveHistory: false }
+        );
+      }
+    } catch (error) {
+      if (pending) pending.remove();
+      appendChatMessage("system", `No pude procesar la solicitud: ${error.message}`);
+    } finally {
+      if (chatSendButton) {
+        chatSendButton.disabled = false;
+        chatSendButton.textContent = "Enviar al auditor";
+      }
+    }
+  });
+}
 
 exportPdfBtn.addEventListener("click", exportarResultadoPDF);
 plataformaSelect.addEventListener("change", actualizarLogoPlataforma);
